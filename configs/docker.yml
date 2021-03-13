@@ -1,0 +1,14 @@
+server:
+  interceptor_port: 8081
+  repeater_posrt: 8082
+
+http_client:
+  timeout: 3
+
+postgres:
+  host: 'postgres'
+  port: 5432
+  db: 'db'
+  user: 'thepsina'
+  password: 'postgres'
+  timeout: 5

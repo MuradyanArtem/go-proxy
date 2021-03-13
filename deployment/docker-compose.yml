@@ -1,0 +1,28 @@
+version: '3.9'
+services:
+  api:
+    build:
+      context: ../
+      dockerfile: build/api.dockerfile
+    image: proxy
+    ports:
+      - 127.0.0.1:8081:8000
+    command: ["-c", "configs/docker.yml"]
+    restart: on-failure
+    depends_on:
+      - db
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+
+  db:
+    build:
+      context: ../
+      dockerfile: build/postgres.dockerfile
+    image: proxy-db
+    environment:
+      BACKUP: /init.sql
+      POSTGRES_DB: forum
+      POSTGRES_USER: forum
+      POSTGRES_PASSWORD: password
