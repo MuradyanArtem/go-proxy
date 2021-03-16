@@ -1,11 +1,11 @@
 package app
 
-import "proxy/internal/domain/repository"
+import (
+	"proxy/internal/domain/repository"
+)
 
-type App struct {
-	Request repository.Request
-}
-
-func NewApp(r repository.Request) *App {
-	return &App{Request: r}
+func NewApp(db *repository.Proxy) *repository.Proxy {
+	return &repository.Proxy{
+		Request: newRequest(db.Request),
+	}
 }

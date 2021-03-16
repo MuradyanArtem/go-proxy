@@ -1,14 +1,18 @@
-server:
-  interceptor_port: 8081
-  repeater_posrt: 8082
+proxy:
 
-http_client:
-  timeout: 3
+  log: "info"
 
-postgres:
-  host: 'postgres'
-  port: 5432
-  db: 'db'
-  user: 'thepsina'
-  password: 'postgres'
-  timeout: 5
+  sniffer:
+    addr: ":8080"
+
+  admin:
+    addr: ":8000"
+
+  postgres:
+    host: "postgres"
+    port: 5432
+    db: "db"
+    user: "user"
+    password: "postgres"
+    maxConnections: 10
+		acquireTimeout: 3

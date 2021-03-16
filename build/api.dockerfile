@@ -7,7 +7,7 @@ RUN GO111MODULE=on \
   CGO_ENABLED=0 \
   GOOS=linux \
   GOARCH=amd64 \
-  go build -o forum cmd/forum-api/main.go
+  go build -o forum cmd/proxy
 
 FROM alpine
 WORKDIR /app

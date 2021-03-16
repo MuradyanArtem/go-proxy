@@ -3,21 +3,72 @@ package main
 import (
 	"flag"
 	"os"
+	"sync"
+
+	"proxy/internal/app"
+	"proxy/internal/infrastructure/storage"
+	"proxy/internal/interfaces/web"
+	"proxy/internal/interfaces/web/server"
+
+	"github.com/jackc/pgx"
+)
+
+const (
+	prefix = "proxy"
 )
 
 func main() {
-	fs := flag.NewFlagSet("Proxy", flag.ExitOnError)
+	Parse(flag.CommandLine, os.Args[1:])
 
-	var host string
-	fs.StringVar(&host, "h", "", "print usage info")
-	var port int
-	fs.IntVar(&port, "p", 8000, "print build info")
-	var config string
-	fs.StringVar(&config, "c", "", "path to server config")
+	conn, err := pgx.NewConnPool(pgx.ConnPoolConfig{
+		ConnConfig: pgx.ConnConfig{
+			Host:                 dbconf.Host,
+			Port:                 dbconf.Port,
+			User:                 dbconf.User,
+			Database:             dbconf.Database,
+			Password:             dbconf.Password,
+			PreferSimpleProtocol: dbconf.PreferSimpleProtocol,
+		},
+		MaxConnections: dbconf.MaxConnections,
+		AcquireTimeout: dbconf.AcquireTimeout,
+	})
+	if err != nil {
+		// log
+		os.Exit(1)
+	}
+	defer conn.Close()
 
-	SetupLogger(os.Stdout, "info")
+	db, err := storage.NewDB(conn)
+	if err != nil {
+		// log
+		os.Exit(1)
+	}
 
-	// nolint
-	fs.Parse(os.Args[1:])
+	app := app.NewApp(db)
 
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func(wg *sync.WaitGroup) {
+		defer wg.Done()
+
+		sniffer := server.NewServer(web.NewSniffer(app, sniffercfg).Init(), sniffercfg)
+		err := sniffer.ListenAndServe()
+		if err != nil {
+			//log
+		}
+	}(&wg)
+
+	wg.Add(1)
+	go func(wg *sync.WaitGroup) {
+		defer wg.Done()
+
+		admin := server.NewServer(web.NewAdmin(app, admincfg).Init(), admincfg)
+		err := admin.ListenAndServe()
+		if err != nil {
+			//log
+		}
+	}(&wg)
+
+	wg.Wait()
 }

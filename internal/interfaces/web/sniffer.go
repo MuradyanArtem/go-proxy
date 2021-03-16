@@ -1,0 +1,266 @@
+package web
+
+import (
+	"bufio"
+	"crypto/tls"
+	"errors"
+	"io"
+	"math/rand"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"os/exec"
+	"proxy/internal/domain/models"
+	"proxy/internal/domain/repository"
+	"proxy/internal/interfaces/web/server"
+	"strconv"
+
+	"github.com/gorilla/mux"
+)
+
+type ProxyInformation struct {
+	InterceptedHttpsRequest *http.Request
+	ForwardedHttpsRequest   *http.Request
+	Scheme                  string
+	Config                  *tls.Config
+}
+
+type Sniffer struct {
+	request repository.Request
+	config  server.Config
+}
+
+func NewSniffer(app *repository.Proxy, c *server.Config) *Sniffer {
+	return &Sniffer{
+		request: app.Request,
+		config:  *c,
+	}
+}
+
+func (s *Sniffer) Init() *mux.Router {
+	r := mux.NewRouter()
+	r.HandleFunc("/", s.Recording)
+	return r
+}
+
+func (s *Sniffer) Recording(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodConnect {
+		s.tunnel(w, r)
+		return
+	}
+
+	s.proxy(w, r)
+}
+
+func (s *Sniffer) proxy(w http.ResponseWriter, r *http.Request) {
+	dump, err := httputil.DumpRequest(r, true)
+	if err != nil {
+		// log
+	}
+
+	req := models.Request{
+		Request: string(dump),
+		URL:     r.RequestURI,
+		Headers: r.Header,
+	}
+
+	if err = s.request.Insert(&req); err != nil {
+		// log
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	resp, err := http.DefaultTransport.RoundTrip(r)
+	defer func() {
+		if err = resp.Body.Close(); err != nil {
+			// log
+		}
+	}()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	copyHeaders(resp.Header, w.Header())
+
+	w.WriteHeader(resp.StatusCode)
+	if _, err = io.Copy(w, resp.Body); err != nil {
+		// log
+	}
+}
+
+func fillInformation(r *http.Request) (*ProxyInformation, error) {
+	requestedUrl, err := url.Parse(r.RequestURI)
+	if err != nil {
+		return nil, err
+	}
+
+	info := ProxyInformation{}
+	if requestedUrl.Scheme == "" {
+		info.Scheme = r.URL.Host
+	} else {
+		info.Scheme = requestedUrl.Scheme
+	}
+
+	info.InterceptedHttpsRequest = r
+	return &info, nil
+}
+
+func hijackConnect(w http.ResponseWriter) (net.Conn, error) {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+		return nil, errors.New("hijacker !ok")
+	}
+
+	hijackedConn, _, err := hijacker.Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return nil, err
+	}
+
+	_, err = hijackedConn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+	if err != nil {
+		hijackedConn.Close()
+		return nil, err
+	}
+
+	return hijackedConn, nil
+}
+
+func generateCertificate(proxyInfo *ProxyInformation) (*tls.Certificate, error) {
+	rootDir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
+	cmdGenDir := rootDir + "/ssl"
+	certFilename := cmdGenDir + proxyInfo.Scheme + ".crt"
+
+	_, errStat := os.Stat(certFilename)
+	if os.IsNotExist(errStat) {
+		genCommand := exec.Command(rootDir+"/scripts/gen_cert.sh", proxyInfo.Scheme, strconv.Itoa(rand.Intn(1000)))
+		if _, err := genCommand.CombinedOutput(); err != nil {
+			return nil, err
+		}
+	}
+
+	cert, err := tls.LoadX509KeyPair(certFilename, cmdGenDir+"/cert.key")
+	if err != nil {
+		return nil, err
+	}
+
+	return &cert, nil
+}
+
+func initializeTCPClient(hijackedConn net.Conn, proxyInfo *ProxyInformation) (*tls.Conn, error) {
+	cert, err := generateCertificate(proxyInfo)
+	if err != nil {
+		// log
+		return nil, err
+	}
+
+	proxyInfo.Config = &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+		ServerName:   proxyInfo.Scheme,
+	}
+
+	TCPClientConn := tls.Server(hijackedConn, proxyInfo.Config)
+
+	if err := TCPClientConn.Handshake(); err != nil {
+		TCPClientConn.Close()
+		hijackedConn.Close()
+		// log
+		return nil, err
+	}
+
+	clientReader := bufio.NewReader(TCPClientConn)
+
+	if proxyInfo.ForwardedHttpsRequest, err = http.ReadRequest(clientReader); err != nil {
+		// log
+		return nil, err
+	}
+
+	return TCPClientConn, nil
+}
+
+func doHttpsRequest(TCPClientConn *tls.Conn, TCPServerConn *tls.Conn, proxyInfo *ProxyInformation) error {
+	rawReq, err := httputil.DumpRequest(proxyInfo.ForwardedHttpsRequest, true)
+	_, err = TCPServerConn.Write(rawReq)
+	if err != nil {
+		// log
+		return err
+	}
+
+	serverReader := bufio.NewReader(TCPServerConn)
+	TCPServerResponse, err := http.ReadResponse(serverReader, proxyInfo.ForwardedHttpsRequest)
+	if err != nil {
+		// log
+		return err
+	}
+
+	decodedResponse, err := decodeResponse(TCPServerResponse)
+	if err != nil {
+		// log
+		return err
+	}
+
+	if _, err = TCPClientConn.Write(decodedResponse); err != nil {
+		// log
+		return err
+	}
+
+	return nil
+}
+
+func (s *Sniffer) tunnel(w http.ResponseWriter, r *http.Request) {
+	hijackedConn, err := hijackConnect(w)
+	if err != nil {
+		// log
+		return
+	}
+	defer hijackedConn.Close()
+
+	proxy, err := fillInformation(r)
+	if err != nil {
+		// log
+		return
+	}
+
+	TCPClientConn, err := initializeTCPClient(hijackedConn, proxy)
+	if err != nil {
+		// log
+		return
+	}
+	defer TCPClientConn.Close()
+
+	TCPServerConn, err := tls.Dial("tcp", proxy.InterceptedHttpsRequest.Host, proxy.Config)
+	if err != nil {
+		// log
+		return
+	}
+
+	err = doHttpsRequest(TCPClientConn, TCPServerConn, proxy)
+	if err != nil {
+		// log
+		return
+	}
+
+	dumped, err := httputil.DumpRequest(proxy.ForwardedHttpsRequest, true)
+	if err != nil {
+		// log
+		return
+	}
+
+	err = s.request.Insert(&models.Request{
+		Headers: proxy.ForwardedHttpsRequest.Header,
+		Request: string(dumped),
+		URL:     proxy.ForwardedHttpsRequest.RequestURI,
+	})
+	if err != nil {
+		// log
+		return
+	}
+}
