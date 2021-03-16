@@ -1,9 +1,10 @@
 package main
 
 import (
-	"flag"
+	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"proxy/internal/app"
 	"proxy/internal/infrastructure/storage"
@@ -11,6 +12,7 @@ import (
 	"proxy/internal/interfaces/web/server"
 
 	"github.com/jackc/pgx"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -18,29 +20,35 @@ const (
 )
 
 func main() {
-	Parse(flag.CommandLine, os.Args[1:])
+	SetupLogger(os.Stdout, "info")
 
 	conn, err := pgx.NewConnPool(pgx.ConnPoolConfig{
 		ConnConfig: pgx.ConnConfig{
-			Host:                 dbconf.Host,
-			Port:                 dbconf.Port,
-			User:                 dbconf.User,
-			Database:             dbconf.Database,
-			Password:             dbconf.Password,
-			PreferSimpleProtocol: dbconf.PreferSimpleProtocol,
+			Host:                 "db",
+			Port:                 5432,
+			User:                 "user",
+			Database:             "db",
+			Password:             "password",
+			PreferSimpleProtocol: true,
 		},
-		MaxConnections: dbconf.MaxConnections,
-		AcquireTimeout: dbconf.AcquireTimeout,
+		MaxConnections: 10,
+		AcquireTimeout: time.Duration(3 * time.Second),
 	})
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "main",
+			"func": "main",
+		}).Fatalln("Cannnot connect to db", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
 
 	db, err := storage.NewDB(conn)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "main",
+			"func": "main",
+		}).Fatalln("Cannot create infrastructure layer", err)
 		os.Exit(1)
 	}
 
@@ -52,10 +60,22 @@ func main() {
 	go func(wg *sync.WaitGroup) {
 		defer wg.Done()
 
-		sniffer := server.NewServer(web.NewSniffer(app, sniffercfg).Init(), sniffercfg)
+		sniffercfg := &server.Config{
+			Addr:              "0.0.0.0:8000",
+			ReadTimeout:       time.Duration(3 * time.Second),
+			ReadHeaderTimeout: time.Duration(3 * time.Second),
+			WriteTimeout:      time.Duration(3 * time.Second),
+			IdleTimeout:       time.Duration(3 * time.Second),
+		}
+
+		sniffer := server.NewServer(http.HandlerFunc(web.NewSniffer(app, sniffercfg).Recording), sniffercfg)
+
 		err := sniffer.ListenAndServe()
 		if err != nil {
-			//log
+			logrus.WithFields(logrus.Fields{
+				"pack": "main",
+				"func": "main",
+			}).Fatalln("Sniffer server error", err)
 		}
 	}(&wg)
 
@@ -63,10 +83,21 @@ func main() {
 	go func(wg *sync.WaitGroup) {
 		defer wg.Done()
 
+		admincfg := &server.Config{
+			Addr:              "0.0.0.0:8080",
+			ReadTimeout:       time.Duration(3 * time.Second),
+			ReadHeaderTimeout: time.Duration(3 * time.Second),
+			WriteTimeout:      time.Duration(3 * time.Second),
+			IdleTimeout:       time.Duration(3 * time.Second),
+		}
+
 		admin := server.NewServer(web.NewAdmin(app, admincfg).Init(), admincfg)
 		err := admin.ListenAndServe()
 		if err != nil {
-			//log
+			logrus.WithFields(logrus.Fields{
+				"pack": "main",
+				"func": "main",
+			}).Fatalln("Admin server error", err)
 		}
 	}(&wg)
 

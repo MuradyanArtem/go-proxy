@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"proxy/internal/domain/models"
@@ -10,8 +11,10 @@ import (
 	"proxy/internal/interfaces/web/server"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/sirupsen/logrus"
 )
 
 type Admin struct {
@@ -65,14 +68,17 @@ func createNewRequest(storedRequest *models.Request) (*http.Request, error) {
 func (s *Admin) Repeat(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "Repeat",
+		}).Error(err)
 	}
 
 	client := http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-		Timeout: 3,
+		Timeout: time.Duration(3 * time.Second),
 	}
 	defer client.CloseIdleConnections()
 
@@ -84,13 +90,20 @@ func (s *Admin) Repeat(w http.ResponseWriter, r *http.Request) {
 
 	newRequest, err := createNewRequest(storedRequest)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "Repeat",
+		}).Error(err)
 		return
 	}
 
 	resp, err := client.Do(newRequest)
 	if err != nil {
-		// log
+		fmt.Println("HERE", newRequest)
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "Repeat",
+		}).Error(err)
 		return
 	}
 	defer resp.Body.Close()
@@ -98,7 +111,10 @@ func (s *Admin) Repeat(w http.ResponseWriter, r *http.Request) {
 	copyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "Repeat",
+		}).Error(err)
 	}
 }
 

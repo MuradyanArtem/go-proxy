@@ -1,22 +1,32 @@
 FROM golang:latest AS build
 
-WORKDIR  /go/src
+WORKDIR  /app
 COPY . .
 
 RUN GO111MODULE=on \
   CGO_ENABLED=0 \
-  GOOS=linux \
-  GOARCH=amd64 \
-  go build -o forum cmd/proxy
+  go build -o proxy ./cmd/proxy
 
 FROM alpine
+
 WORKDIR /app
 
-ADD configs/docker.yml .
+RUN apk upgrade --update-cache --available && apk add \
+  openssl \
+  ca-certificates \
+  && rm -rf /var/cache/apk/*
 
-COPY --from=build /go/src/forum .
-RUN chmod +x forum
+ADD ssl ssl
+ADD scripts/gen_cert.sh ssl/
+RUN chmod +x ssl/gen_cert.sh
 
-ENTRYPOINT ["/app/forum"]
+RUN cp ssl/ca.crt /etc/ssl
+RUN update-ca-certificates
+
+COPY --from=build /app/proxy .
+RUN chmod +x proxy
+
+ENTRYPOINT ["/app/proxy"]
 
 EXPOSE 8000/tcp
+EXPOSE 8080/tcp

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -17,7 +18,7 @@ import (
 	"proxy/internal/interfaces/web/server"
 	"strconv"
 
-	"github.com/gorilla/mux"
+	"github.com/sirupsen/logrus"
 )
 
 type ProxyInformation struct {
@@ -39,12 +40,6 @@ func NewSniffer(app *repository.Proxy, c *server.Config) *Sniffer {
 	}
 }
 
-func (s *Sniffer) Init() *mux.Router {
-	r := mux.NewRouter()
-	r.HandleFunc("/", s.Recording)
-	return r
-}
-
 func (s *Sniffer) Recording(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		s.tunnel(w, r)
@@ -57,7 +52,10 @@ func (s *Sniffer) Recording(w http.ResponseWriter, r *http.Request) {
 func (s *Sniffer) proxy(w http.ResponseWriter, r *http.Request) {
 	dump, err := httputil.DumpRequest(r, true)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "proxy",
+		}).Error(err)
 	}
 
 	req := models.Request{
@@ -67,7 +65,10 @@ func (s *Sniffer) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err = s.request.Insert(&req); err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "proxy",
+		}).Error(err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -75,7 +76,10 @@ func (s *Sniffer) proxy(w http.ResponseWriter, r *http.Request) {
 	resp, err := http.DefaultTransport.RoundTrip(r)
 	defer func() {
 		if err = resp.Body.Close(); err != nil {
-			// log
+			logrus.WithFields(logrus.Fields{
+				"pack": "web",
+				"func": "proxy",
+			}).Error(err)
 		}
 	}()
 	if err != nil {
@@ -87,7 +91,10 @@ func (s *Sniffer) proxy(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(resp.StatusCode)
 	if _, err = io.Copy(w, resp.Body); err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "proxy",
+		}).Error(err)
 	}
 }
 
@@ -136,12 +143,11 @@ func generateCertificate(proxyInfo *ProxyInformation) (*tls.Certificate, error) 
 		return nil, err
 	}
 
-	cmdGenDir := rootDir + "/ssl"
+	cmdGenDir := rootDir + "/ssl/"
 	certFilename := cmdGenDir + proxyInfo.Scheme + ".crt"
 
-	_, errStat := os.Stat(certFilename)
-	if os.IsNotExist(errStat) {
-		genCommand := exec.Command(rootDir+"/scripts/gen_cert.sh", proxyInfo.Scheme, strconv.Itoa(rand.Intn(1000)))
+	if _, errStat := os.Stat(certFilename); os.IsNotExist(errStat) {
+		genCommand := exec.Command("sh", cmdGenDir+"/gen_cert.sh", proxyInfo.Scheme, strconv.Itoa(rand.Intn(1000)))
 		if _, err := genCommand.CombinedOutput(); err != nil {
 			return nil, err
 		}
@@ -158,7 +164,6 @@ func generateCertificate(proxyInfo *ProxyInformation) (*tls.Certificate, error) 
 func initializeTCPClient(hijackedConn net.Conn, proxyInfo *ProxyInformation) (*tls.Conn, error) {
 	cert, err := generateCertificate(proxyInfo)
 	if err != nil {
-		// log
 		return nil, err
 	}
 
@@ -172,14 +177,12 @@ func initializeTCPClient(hijackedConn net.Conn, proxyInfo *ProxyInformation) (*t
 	if err := TCPClientConn.Handshake(); err != nil {
 		TCPClientConn.Close()
 		hijackedConn.Close()
-		// log
 		return nil, err
 	}
 
 	clientReader := bufio.NewReader(TCPClientConn)
-
-	if proxyInfo.ForwardedHttpsRequest, err = http.ReadRequest(clientReader); err != nil {
-		// log
+	proxyInfo.ForwardedHttpsRequest, err = http.ReadRequest(clientReader)
+	if err != nil {
 		return nil, err
 	}
 
@@ -190,25 +193,21 @@ func doHttpsRequest(TCPClientConn *tls.Conn, TCPServerConn *tls.Conn, proxyInfo 
 	rawReq, err := httputil.DumpRequest(proxyInfo.ForwardedHttpsRequest, true)
 	_, err = TCPServerConn.Write(rawReq)
 	if err != nil {
-		// log
 		return err
 	}
 
 	serverReader := bufio.NewReader(TCPServerConn)
 	TCPServerResponse, err := http.ReadResponse(serverReader, proxyInfo.ForwardedHttpsRequest)
 	if err != nil {
-		// log
 		return err
 	}
 
 	decodedResponse, err := decodeResponse(TCPServerResponse)
 	if err != nil {
-		// log
 		return err
 	}
 
 	if _, err = TCPClientConn.Write(decodedResponse); err != nil {
-		// log
 		return err
 	}
 
@@ -218,49 +217,70 @@ func doHttpsRequest(TCPClientConn *tls.Conn, TCPServerConn *tls.Conn, proxyInfo 
 func (s *Sniffer) tunnel(w http.ResponseWriter, r *http.Request) {
 	hijackedConn, err := hijackConnect(w)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "tunnel",
+		}).Error(err)
 		return
 	}
 	defer hijackedConn.Close()
 
 	proxy, err := fillInformation(r)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "tunnel",
+		}).Error(err)
 		return
 	}
 
 	TCPClientConn, err := initializeTCPClient(hijackedConn, proxy)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "tunnel",
+		}).Error(err)
 		return
 	}
 	defer TCPClientConn.Close()
 
 	TCPServerConn, err := tls.Dial("tcp", proxy.InterceptedHttpsRequest.Host, proxy.Config)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "tunnel",
+		}).Error(err)
 		return
 	}
 
 	err = doHttpsRequest(TCPClientConn, TCPServerConn, proxy)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "tunnel",
+		}).Error(err)
 		return
 	}
 
-	dumped, err := httputil.DumpRequest(proxy.ForwardedHttpsRequest, true)
+	dump, err := httputil.DumpRequest(proxy.ForwardedHttpsRequest, true)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "tunnel",
+		}).Error(err)
 		return
 	}
 
 	err = s.request.Insert(&models.Request{
 		Headers: proxy.ForwardedHttpsRequest.Header,
-		Request: string(dumped),
-		URL:     proxy.ForwardedHttpsRequest.RequestURI,
+		Request: string(dump),
+		URL:     fmt.Sprintf("https://%s%s", proxy.ForwardedHttpsRequest.Host, proxy.ForwardedHttpsRequest.URL.Path),
 	})
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "tunnel",
+		}).Error(err)
 		return
 	}
 }

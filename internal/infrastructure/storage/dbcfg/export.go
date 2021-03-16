@@ -2,6 +2,7 @@ package dbcfg
 
 import (
 	"proxy/internal/infrastructure/storage"
+	"time"
 )
 
 func Export(cfg Config, prefix string) *storage.DBConfig {
@@ -22,12 +23,12 @@ func Export(cfg Config, prefix string) *storage.DBConfig {
 			"postgres user name",
 		)
 		pass = cfg.String(
-			prefix+"pass",
+			prefix+"password",
 			"",
 			"postgres user pass",
 		)
-		name = cfg.String(
-			prefix+"name",
+		db = cfg.String(
+			prefix+"db",
 			"",
 			"postgres DB name",
 		)
@@ -43,7 +44,7 @@ func Export(cfg Config, prefix string) *storage.DBConfig {
 		)
 		timeout = cfg.Duration(
 			prefix+"acquireTimeout",
-			3,
+			time.Duration(3*time.Second),
 			"postgres set timeout",
 		)
 	)
@@ -53,7 +54,7 @@ func Export(cfg Config, prefix string) *storage.DBConfig {
 		Port:                 uint16(*port),
 		User:                 *user,
 		Password:             *pass,
-		Database:             *name,
+		Database:             *db,
 		PreferSimpleProtocol: *isSimple,
 		MaxConnections:       *maxConn,
 		AcquireTimeout:       *timeout,

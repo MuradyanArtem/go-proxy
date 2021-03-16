@@ -6,8 +6,8 @@ services:
       dockerfile: build/api.dockerfile
     image: proxy
     ports:
-      - 127.0.0.1:8081:8000
-    command: ["-c", "configs/docker.yml"]
+      - 127.0.0.1:8888:8000
+      - 127.0.0.1:8880:8080
     restart: on-failure
     depends_on:
       - db
@@ -23,6 +23,6 @@ services:
     image: proxy-db
     environment:
       BACKUP: /init.sql
-      POSTGRES_DB: forum
-      POSTGRES_USER: forum
+      POSTGRES_DB: db
+      POSTGRES_USER: user
       POSTGRES_PASSWORD: password

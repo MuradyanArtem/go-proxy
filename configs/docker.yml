@@ -1,6 +1,6 @@
 proxy:
 
-  log: "info"
+  log: "debug"
 
   sniffer:
     addr: ":8080"
@@ -15,4 +15,3 @@ proxy:
     user: "user"
     password: "postgres"
     maxConnections: 10
-		acquireTimeout: 3

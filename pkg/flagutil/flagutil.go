@@ -15,6 +15,8 @@ func ParseYAML(fs *flag.FlagSet, data []byte) error {
 		return err
 	}
 
+	fmt.Println("here", m)
+
 	return setup(fs, "", m)
 }
 
