@@ -50,7 +50,7 @@ func (db *Request) Insert(req *models.Request) error {
 	return nil
 }
 
-func (db *Request) GetRequestList() (*[]models.Request, error) {
+func (db *Request) GetRequestList() ([]models.Request, error) {
 	tx, err := db.connection.Begin()
 	if err != nil {
 		return nil, err
@@ -69,7 +69,7 @@ func (db *Request) GetRequestList() (*[]models.Request, error) {
 		return nil, err
 	}
 
-	requests := make([]models.Request, 0, 0)
+	requests := make([]models.Request, 0)
 	for out.Next() {
 		var request models.Request
 
@@ -83,7 +83,7 @@ func (db *Request) GetRequestList() (*[]models.Request, error) {
 	if err = out.Err(); err != nil {
 		return nil, err
 	}
-	return &requests, nil
+	return requests, nil
 }
 
 func (db *Request) GetRequestById(id int64) (*models.Request, error) {

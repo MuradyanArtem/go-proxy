@@ -191,6 +191,10 @@ func initializeTCPClient(hijackedConn net.Conn, proxyInfo *ProxyInformation) (*t
 
 func doHttpsRequest(TCPClientConn *tls.Conn, TCPServerConn *tls.Conn, proxyInfo *ProxyInformation) error {
 	rawReq, err := httputil.DumpRequest(proxyInfo.ForwardedHttpsRequest, true)
+	if err != nil {
+		return err
+	}
+
 	_, err = TCPServerConn.Write(rawReq)
 	if err != nil {
 		return err

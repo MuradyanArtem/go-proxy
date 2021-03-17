@@ -15,9 +15,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const (
-	prefix = "proxy"
-)
+// const (
+// 	prefix = "proxy"
+// )
 
 func main() {
 	SetupLogger(os.Stdout, "info")

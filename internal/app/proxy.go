@@ -7,5 +7,6 @@ import (
 func NewApp(db *repository.Proxy) *repository.Proxy {
 	return &repository.Proxy{
 		Request: newRequest(db.Request),
+		Scanner: newScanner(db.Request),
 	}
 }

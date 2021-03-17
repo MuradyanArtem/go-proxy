@@ -3,15 +3,17 @@ package web
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
-	"proxy/internal/domain/models"
-	"proxy/internal/domain/repository"
-	"proxy/internal/interfaces/web/server"
 	"strconv"
 	"strings"
 	"time"
+
+	"proxy/internal/app"
+	"proxy/internal/domain/models"
+	"proxy/internal/domain/repository"
+	"proxy/internal/interfaces/web/server"
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
@@ -19,12 +21,14 @@ import (
 
 type Admin struct {
 	request repository.Request
+	scanner repository.Scanner
 	config  server.Config
 }
 
 func NewAdmin(app *repository.Proxy, c *server.Config) *Admin {
 	return &Admin{
 		request: app.Request,
+		scanner: app.Scanner,
 		config:  *c,
 	}
 }
@@ -74,14 +78,6 @@ func (s *Admin) Repeat(w http.ResponseWriter, r *http.Request) {
 		}).Error(err)
 	}
 
-	client := http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		Timeout: time.Duration(3 * time.Second),
-	}
-	defer client.CloseIdleConnections()
-
 	storedRequest, err := s.request.GetRequestById(int64(id))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -97,9 +93,16 @@ func (s *Admin) Repeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	client := http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: time.Duration(3 * time.Second),
+	}
+	defer client.CloseIdleConnections()
+
 	resp, err := client.Do(newRequest)
 	if err != nil {
-		fmt.Println("HERE", newRequest)
 		logrus.WithFields(logrus.Fields{
 			"pack": "web",
 			"func": "Repeat",
@@ -123,20 +126,29 @@ func (s *Admin) AllRequests(w http.ResponseWriter, r *http.Request) {
 
 	requests, err := s.request.GetRequestList()
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "AllRequests",
+		}).Error(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	res, err := json.Marshal(*requests)
+	res, err := json.Marshal(requests)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "AllRequests",
+		}).Error(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 	if _, err = w.Write(res); err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "AllRequests",
+		}).Error(err)
 	}
 }
 
@@ -145,31 +157,144 @@ func (s *Admin) RequestById(w http.ResponseWriter, r *http.Request) {
 
 	id, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "RequestById",
+		}).Error(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	request, err := s.request.GetRequestById(int64(id))
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "RequestById",
+		}).Error(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	res, err := json.Marshal(*request)
 	if err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "RequestById",
+		}).Error(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 	if _, err = w.Write(res); err != nil {
-		// log
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "RequestById",
+		}).Error(err)
 	}
+}
+
+func CheckXSS(response *http.Response) (bool, error) {
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return false, err
+	}
+	isVulBody := strings.Contains(string(body), app.XSS)
+	isVulRequest := strings.Contains(string(response.Request.URL.RawQuery), app.XSS)
+	if isVulBody || isVulRequest {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *Admin) ScanRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
+
+	id, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "ScanRequest",
+		}).Error(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	req, err := s.request.GetRequestById(int64(id))
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "ScanRequest",
+		}).Error(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	injectedURLs, err := s.scanner.MakeInject(&req.URL)
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "ScanRequest",
+		}).Error(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	client := http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: time.Duration(3 * time.Second),
+	}
+	defer client.CloseIdleConnections()
+
+	scanner := models.Scanner{}
+	for _, url := range injectedURLs {
+		injectedReq := *req
+		injectedReq.URL = url
+		newRequest, err := createNewRequest(&injectedReq)
+		if err != nil {
+			logrus.WithFields(logrus.Fields{
+				"pack": "web",
+				"func": "Repeat",
+			}).Error(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		injectedResp, err := client.Do(newRequest)
+		if err != nil {
+			logrus.WithFields(logrus.Fields{
+				"pack": "web",
+				"func": "Repeat",
+			}).Error(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		defer injectedResp.Body.Close()
+
+		isVulnerable, err := CheckXSS(injectedResp)
+		if err != nil {
+			logrus.WithFields(logrus.Fields{
+				"pack": "web",
+				"func": "Repeat",
+			}).Error(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if isVulnerable {
+			scanner.VulnerableURL = append(scanner.VulnerableURL, url)
+		}
+	}
+
+	response, err := json.Marshal(scanner)
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"pack": "web",
+			"func": "Repeat",
+		}).Error(err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	w.Write(response)
 	w.WriteHeader(http.StatusOK)
 }

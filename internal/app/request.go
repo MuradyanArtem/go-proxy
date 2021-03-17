@@ -19,7 +19,7 @@ func (r *Request) Insert(req *models.Request) error {
 	return r.db.Insert(req)
 }
 
-func (r *Request) GetRequestList() (*[]models.Request, error) {
+func (r *Request) GetRequestList() ([]models.Request, error) {
 	return r.db.GetRequestList()
 }
 
